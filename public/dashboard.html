@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deriv RSI Bot — Dashboard</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='12' fill='%23080c10'/><polyline points='10,70 30,40 50,60 70,25 90,45' stroke='%2300ff88' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/><circle cx='70' cy='25' r='6' fill='%2300ff88'/></svg>">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;700&display=swap');
+
+  :root {
+    --bg:        #080c10;
+    --bg2:       #0d1117;
+    --bg3:       #111820;
+    --border:    #1e2d3d;
+    --green:     #00ff88;
+    --red:       #ff3d5a;
+    --yellow:    #ffc940;
+    --blue:      #4db8ff;
+    --text:      #c9d8e8;
+    --text-dim:  #556677;
+    --mono:      'Share Tech Mono', monospace;
+    --sans:      'Exo 2', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 18px;
+    color: var(--green);
+    letter-spacing: 2px;
+    text-shadow: 0 0 20px rgba(0,255,136,0.4);
+  }
+
+  .logo span { color: var(--text-dim); }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    display: inline-block;
+    margin-right: 6px;
+  }
+
+  .status-dot.connected {
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+
+  .status-dot.disconnected { background: var(--red); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  .account-id { color: var(--text-dim); }
+  .account-id span { color: var(--blue); }
+
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 1px;
+    background: var(--border);
+  }
+
+  .stat-box {
+    background: var(--bg2);
+    padding: 16px 20px;
+    text-align: center;
+  }
+
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1;
+    margin-bottom: 4px;
+    transition: transform 0.3s;
+  }
+
+  .stat-value.green  { color: var(--green); }
+  .stat-value.red    { color: var(--red); }
+  .stat-value.blue   { color: var(--blue); }
+  .stat-value.yellow { color: var(--yellow); }
+
+  .stat-label {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 280px 1fr 280px;
+    gap: 1px;
+    background: var(--border);
+    min-height: calc(100vh - 113px);
+  }
+
+  .panel {
+    background: var(--bg2);
+    padding: 20px;
+  }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 3px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .indicator-block { margin-bottom: 20px; }
+
+  .indicator-name {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .indicator-value {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: bold;
+    line-height: 1;
+    transition: color 0.3s;
+  }
+
+  .rsi-bar {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+
+  .rsi-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s, background 0.3s;
+  }
+
+  .signal-badge {
+    display: inline-block;
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: 3px;
+    font-weight: bold;
+    text-transform: uppercase;
+    transition: all 0.3s;
+  }
+
+  .signal-badge.BUY  { background: rgba(0,255,136,0.15); color: var(--green); border: 1px solid var(--green); }
+  .signal-badge.SELL { background: rgba(255,61,90,0.15);  color: var(--red);   border: 1px solid var(--red); }
+  .signal-badge.HOLD { background: rgba(85,102,119,0.15); color: var(--text-dim); border: 1px solid var(--border); }
+
+  .price-ticker {
+    font-family: var(--mono);
+    font-size: 32px;
+    font-weight: bold;
+    color: var(--text);
+    margin-bottom: 4px;
+    transition: color 0.2s;
+  }
+
+  .price-ticker.up   { color: var(--green); }
+  .price-ticker.down { color: var(--red); }
+
+  .price-change {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .chart-panel {
+    background: var(--bg2);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .chart-wrap {
+    flex: 1;
+    position: relative;
+    min-height: 400px;
+  }
+
+  .trade-log {
+    font-family: var(--mono);
+    font-size: 12px;
+    overflow-y: auto;
+    max-height: calc(100vh - 200px);
+  }
+
+  .trade-log::-webkit-scrollbar { width: 4px; }
+  .trade-log::-webkit-scrollbar-track { background: var(--bg); }
+  .trade-log::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .trade-entry {
+    display: grid;
+    grid-template-columns: 65px 1fr auto;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    animation: fadeIn 0.3s ease;
+  }
+
+  @keyframes fadeIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
+
+  .trade-time  { color: var(--text-dim); font-size: 11px; }
+  .trade-type.WON  { color: var(--green); }
+  .trade-type.LOST { color: var(--red); }
+  .trade-type.OPEN { color: var(--yellow); }
+  .trade-pnl.pos   { color: var(--green); }
+  .trade-pnl.neg   { color: var(--red); }
+
+  .collecting-bar {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--yellow);
+    display: none;
+  }
+
+  .collecting-bar.visible { display: block; }
+
+  .progress-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 8px;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--yellow);
+    border-radius: 2px;
+    transition: width 0.5s;
+    box-shadow: 0 0 8px var(--yellow);
+  }
+
+  .active-trade {
+    background: rgba(255,201,64,0.05);
+    border: 1px solid rgba(255,201,64,0.3);
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    display: none;
+    animation: borderPulse 1.5s infinite;
+  }
+
+  .active-trade.visible { display: block; }
+
+  @keyframes borderPulse {
+    0%,100% { border-color: rgba(255,201,64,0.3); }
+    50%      { border-color: rgba(255,201,64,0.9); }
+  }
+
+  .active-trade-label  { color: var(--yellow); letter-spacing: 2px; font-size: 10px; margin-bottom: 6px; }
+  .active-trade-detail { color: var(--text); font-size: 14px; }
+
+  #connecting {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    font-family: var(--mono);
+  }
+
+  .connecting-logo {
+    font-size: 28px;
+    color: var(--green);
+    letter-spacing: 4px;
+    margin-bottom: 24px;
+    text-shadow: 0 0 30px rgba(0,255,136,0.5);
+  }
+
+  .connecting-msg {
+    color: var(--text-dim);
+    font-size: 13px;
+    letter-spacing: 2px;
+    animation: blink 1s infinite;
+  }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+</style>
+</head>
+<body>
+
+<div id="connecting">
+  <div class="connecting-logo">DERIV RSI BOT</div>
+  <div class="connecting-msg">CONNECTING TO BOT...</div>
+</div>
+
+<header>
+  <div class="logo">DERIV<span>/</span>RSI<span>·</span>BOT</div>
+  <div class="status-bar">
+    <div>
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText" style="color:var(--text-dim)">DISCONNECTED</span>
+    </div>
+    <div class="account-id">ACCOUNT: <span id="accountId">—</span></div>
+    <div class="account-id">SYMBOL: <span id="symbol" style="color:var(--yellow)">—</span></div>
+    <div id="clock" style="color:var(--text-dim);font-family:var(--mono);font-size:12px"></div>
+  </div>
+</header>
+
+<div class="stats-row">
+  <div class="stat-box">
+    <div class="stat-value green" id="statBalance">$—</div>
+    <div class="stat-label">Balance</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-value" id="statPnL">$0.00</div>
+    <div class="stat-label">Net P&L</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-value green" id="statWins">0</div>
+    <div class="stat-label">Wins</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-value red" id="statLosses">0</div>
+    <div class="stat-label">Losses</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-value blue" id="statWinRate">0%</div>
+    <div class="stat-label">Win Rate</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-value yellow" id="statTrades">0</div>
+    <div class="stat-label">Total Trades</div>
+  </div>
+</div>
+
+<div class="grid">
+
+  <!-- Left panel: Indicators -->
+  <div class="panel">
+    <div class="panel-title">Live Indicators</div>
+
+    <div class="collecting-bar" id="collectingBar">
+      ⏳ COLLECTING TICKS <span id="collectProgress">0/50</span>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div class="active-trade" id="activeTrade">
+      <div class="active-trade-label">⚡ TRADE ACTIVE</div>
+      <div class="active-trade-detail" id="activeTradeDetail">—</div>
+    </div>
+
+    <div class="indicator-block">
+      <div class="indicator-name">RSI (14)</div>
+      <div class="indicator-value" id="rsiValue" style="color:var(--text-dim)">—</div>
+      <div class="rsi-bar">
+        <div class="rsi-fill" id="rsiFill" style="width:50%;background:var(--text-dim)"></div>
+      </div>
+    </div>
+
+    <div class="indicator-block">
+      <div class="indicator-name">MACD Histogram</div>
+      <div class="indicator-value" id="macdValue" style="color:var(--text-dim)">—</div>
+    </div>
+
+    <div class="indicator-block">
+      <div class="indicator-name">Signal</div>
+      <span class="signal-badge HOLD" id="signalBadge">HOLD</span>
+    </div>
+
+    <div class="indicator-block" style="margin-top:24px">
+      <div class="indicator-name">Live Price</div>
+      <div class="price-ticker" id="priceTicker">—</div>
+      <div class="price-change" id="priceChange">—</div>
+    </div>
+  </div>
+
+  <!-- Center: Chart -->
+  <div class="chart-panel">
+    <div class="panel-title">
+      Price Chart — <span id="chartSymbol" style="color:var(--yellow)">1HZ75V</span>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="priceChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Right: Trade log -->
+  <div class="panel">
+    <div class="panel-title">Trade History</div>
+    <div class="trade-log" id="tradeLog">
+      <div id="logPlaceholder" style="color:var(--text-dim);font-size:12px;padding:20px 0;text-align:center">
+        Waiting for first trade...
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const state = {
+  prices: [], labels: [],
+  lastPrice: null,
+  wins: 0, losses: 0, netPnL: 0,
+};
+
+// Clock
+setInterval(() => {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+// Chart
+const ctx = document.getElementById('priceChart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      data: [],
+      borderColor: '#4db8ff',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.3,
+      fill: { target: 'origin', above: 'rgba(77,184,255,0.04)' },
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { display: false },
+      y: {
+        position: 'right',
+        grid: { color: 'rgba(30,45,61,0.5)' },
+        ticks: { color: '#556677', font: { family: 'Share Tech Mono', size: 11 }, maxTicksLimit: 6 },
+        border: { color: 'transparent' },
+      }
+    }
+  }
+});
+
+function addPriceToChart(price, time) {
+  state.prices.push(price);
+  state.labels.push(time);
+  if (state.prices.length > 120) { state.prices.shift(); state.labels.shift(); }
+  chart.data.datasets[0].data = [...state.prices];
+  chart.data.labels = [...state.labels];
+  chart.update('none');
+}
+
+function addTradeEntry(type, pnl) {
+  const log = document.getElementById('tradeLog');
+  const ph  = document.getElementById('logPlaceholder');
+  if (ph) ph.remove();
+
+  const time  = new Date().toLocaleTimeString();
+  const entry = document.createElement('div');
+  entry.className = 'trade-entry';
+
+  const pnlClass = pnl > 0 ? 'pos' : pnl < 0 ? 'neg' : '';
+  const pnlStr   = pnl > 0 ? `+$${pnl.toFixed(2)}` : pnl < 0 ? `-$${Math.abs(pnl).toFixed(2)}` : '...';
+  const label    = type === 'OPEN' ? '⚡ OPEN' : type === 'WON' ? '✅ WIN' : '❌ LOSS';
+
+  entry.innerHTML = `
+    <div class="trade-time">${time}</div>
+    <div class="trade-type ${type}">${label}</div>
+    <div class="trade-pnl ${pnlClass}">${pnlStr}</div>
+  `;
+
+  log.insertBefore(entry, log.firstChild);
+  while (log.children.length > 30) log.removeChild(log.lastChild);
+}
+
+function updateStats() {
+  const total   = state.wins + state.losses;
+  const winRate = total > 0 ? ((state.wins / total) * 100).toFixed(1) : 0;
+  const pnl     = state.netPnL;
+
+  document.getElementById('statWins').textContent   = state.wins;
+  document.getElementById('statLosses').textContent = state.losses;
+  document.getElementById('statTrades').textContent = total;
+
+  const wrEl = document.getElementById('statWinRate');
+  wrEl.textContent = `${winRate}%`;
+  wrEl.className   = `stat-value ${winRate >= 58 ? 'green' : winRate >= 45 ? 'blue' : 'red'}`;
+
+  const pnlEl = document.getElementById('statPnL');
+  pnlEl.textContent = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+  pnlEl.className   = `stat-value ${pnl > 0 ? 'green' : pnl < 0 ? 'red' : ''}`;
+}
+
+// WebSocket
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}`);
+
+  ws.onopen = () => {
+    document.getElementById('connecting').style.display = 'none';
+    document.getElementById('statusDot').className = 'status-dot connected';
+    document.getElementById('statusText').textContent  = 'CONNECTED';
+    document.getElementById('statusText').style.color  = 'var(--green)';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('statusDot').className = 'status-dot disconnected';
+    document.getElementById('statusText').textContent = 'DISCONNECTED';
+    document.getElementById('statusText').style.color = 'var(--red)';
+    setTimeout(connect, 3000);
+  };
+
+  ws.onmessage = (msg) => {
+    const { event, data } = JSON.parse(msg.data);
+
+    if (event === 'connected') {
+      document.getElementById('accountId').textContent    = data.accountId;
+      document.getElementById('symbol').textContent       = data.symbol;
+      document.getElementById('chartSymbol').textContent  = data.symbol;
+      document.getElementById('statBalance').textContent  = `$${parseFloat(data.balance).toFixed(2)}`;
+    }
+
+    if (event === 'balance') {
+      document.getElementById('statBalance').textContent = `$${parseFloat(data.balance).toFixed(2)}`;
+    }
+
+    if (event === 'tick') {
+      const price = data.price;
+      const time  = new Date().toLocaleTimeString();
+
+      // Price ticker
+      const ticker = document.getElementById('priceTicker');
+      const dir    = state.lastPrice ? (price > state.lastPrice ? 'up' : price < state.lastPrice ? 'down' : '') : '';
+      ticker.textContent = price.toFixed(5);
+      ticker.className   = `price-ticker ${dir}`;
+
+      if (state.lastPrice) {
+        const diff  = (price - state.lastPrice).toFixed(5);
+        const diffEl = document.getElementById('priceChange');
+        diffEl.textContent = `${diff >= 0 ? '+' : ''}${diff}`;
+        diffEl.style.color = diff >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+
+      state.lastPrice = price;
+      addPriceToChart(price, time);
+
+      // Collecting bar
+      if (data.collecting) {
+        document.getElementById('collectingBar').className = 'collecting-bar visible';
+        document.getElementById('collectProgress').textContent = `${data.ticksCollected}/${data.minTicks}`;
+        document.getElementById('progressFill').style.width = `${(data.ticksCollected / data.minTicks) * 100}%`;
+      } else {
+        document.getElementById('collectingBar').className = 'collecting-bar';
+      }
+
+      // RSI
+      if (data.rsi != null) {
+        const rsi   = parseFloat(data.rsi);
+        const rsiEl = document.getElementById('rsiValue');
+        const fill  = document.getElementById('rsiFill');
+        rsiEl.textContent    = rsi.toFixed(2);
+        fill.style.width     = `${rsi}%`;
+        if (rsi <= 20) {
+          rsiEl.style.color = 'var(--green)';
+          fill.style.background = 'var(--green)';
+        } else if (rsi >= 80) {
+          rsiEl.style.color = 'var(--red)';
+          fill.style.background = 'var(--red)';
+        } else {
+          rsiEl.style.color = 'var(--text)';
+          fill.style.background = 'var(--blue)';
+        }
+      }
+
+      // MACD
+      if (data.macd != null) {
+        const macd   = parseFloat(data.macd);
+        const macdEl = document.getElementById('macdValue');
+        macdEl.textContent = macd >= 0 ? `+${macd.toFixed(4)}` : macd.toFixed(4);
+        macdEl.style.color = macd >= 0 ? 'var(--green)' : 'var(--red)';
+      }
+
+      // Signal badge
+      const sig   = data.signal || 'HOLD';
+      const sigEl = document.getElementById('signalBadge');
+      sigEl.textContent = sig;
+      sigEl.className   = `signal-badge ${sig}`;
+    }
+
+    if (event === 'trade_opened') {
+      document.getElementById('activeTrade').className = 'active-trade visible';
+      document.getElementById('activeTradeDetail').textContent =
+        `${data.signal === 'BUY' ? '📈 CALL' : '📉 PUT'} · $${data.stake} · ${data.symbol}`;
+      addTradeEntry('OPEN', 0);
+    }
+
+    if (event === 'trade_closed') {
+      document.getElementById('activeTrade').className = 'active-trade';
+      state.wins   = data.wins;
+      state.losses = data.losses;
+      state.netPnL = parseFloat(data.netPnL);
+
+      // Replace OPEN entry with result
+      const openEl = document.querySelector('.trade-type.OPEN');
+      if (openEl) openEl.closest('.trade-entry').remove();
+
+      addTradeEntry(data.status, data.profit);
+      updateStats();
+
+      const balEl = document.getElementById('statBalance');
+      balEl.style.transform = 'scale(1.1)';
+      setTimeout(() => balEl.style.transform = '', 300);
+    }
+  };
+}
+
+connect();
+</script>
+</body>
+</html>

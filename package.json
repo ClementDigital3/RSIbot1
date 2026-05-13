@@ -1,0 +1,17 @@
+{
+  "name": "deriv-rsi-bot",
+  "version": "1.0.0",
+  "description": "Automated RSI trading bot for Deriv Synthetic Indices",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "demo": "DEMO_MODE=true node index.js"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "ws": "^8.16.0"
+  }
+}
