@@ -1,38 +1,28 @@
-// src/trader.js
-// Handles opening and tracking Deriv contracts
-
+// src/trader.js — Accumulator Strategy
 import logger from './logger.js';
 
 export class Trader {
   constructor(connection, config) {
-    this.conn = connection;
-    this.symbol = config.SYMBOL || 'R_75';
-    this.stake = parseFloat(config.STAKE) || 1;
-    this.duration = parseInt(config.CONTRACT_DURATION) || 1;
-    this.durationUnit = 'm'; // minutes
+    this.conn           = connection;
+    this.symbol         = config.SYMBOL        || '1HZ75V';
+    this.stake          = parseFloat(config.STAKE)            || 1;
+    this.growthRate     = parseFloat(config.GROWTH_RATE)      || 0.01;
+    this.takeProfitPct  = parseFloat(config.TAKE_PROFIT_PCT)  || 0.40;
+    this.trailingStopPct= parseFloat(config.TRAILING_STOP_PCT)|| 0.50;
   }
 
-  /**
-   * Buy a contract
-   * @param {'BUY'|'SELL'} signal - BUY = CALL (price goes up), SELL = PUT (price goes down)
-   * @returns {Promise<object>} contract details
-   */
-  async openTrade(signal) {
-    const contractType = signal === 'BUY' ? 'CALL' : 'PUT';
-    const directionLabel = signal === 'BUY' ? '📈 CALL' : '📉 PUT ';
+  // ── Open accumulator contract ────────────────────────────
+  async openAccumulator() {
+    logger.trade(`Opening ACCUMULATOR | $${this.stake} | Growth: ${this.growthRate * 100}% | ${this.symbol}`);
 
-    logger.trade(`Opening ${directionLabel} | $${this.stake} | ${this.duration}${this.durationUnit} | ${this.symbol}`);
-
-    // Step 1: Get a price proposal first
     const proposal = await this.conn.send({
-      proposal: 1,
-      amount: this.stake,
-      basis: 'stake',
-      contract_type: contractType,
-      currency: 'USD',
-      duration: this.duration,
-      duration_unit: this.durationUnit,
-      underlying_symbol: this.symbol,
+      proposal:           1,
+      amount:             this.stake,
+      basis:              'stake',
+      contract_type:      'ACCU',
+      currency:           'USD',
+      growth_rate:        this.growthRate,
+      underlying_symbol:  this.symbol,
     });
 
     if (proposal.error) {
@@ -40,14 +30,8 @@ export class Trader {
       return null;
     }
 
-    const proposalId = proposal.proposal.id;
-    const potentialPayout = proposal.proposal.payout;
-
-    logger.trade(`Proposal ID: ${proposalId} | Potential payout: $${potentialPayout}`);
-
-    // Step 2: Buy the contract
     const buyRes = await this.conn.send({
-      buy: proposalId,
+      buy:   proposal.proposal.id,
       price: this.stake,
     });
 
@@ -57,62 +41,105 @@ export class Trader {
     }
 
     const contract = buyRes.buy;
-    logger.trade(`Contract opened ✓ | ID: ${contract.contract_id} | Entry: ${contract.start_time}`);
-
-    return {
-      contractId: contract.contract_id,
-      contractType,
-      stake: this.stake,
-      potentialPayout,
-      openTime: Date.now(),
-    };
+    logger.trade(`Accumulator opened ✓ | ID: ${contract.contract_id}`);
+    return contract;
   }
 
-  /**
-   * Subscribe to contract updates and resolve when it settles
-   * @param {string} contractId
-   * @returns {Promise<{ profit: number, status: string }>}
-   */
-  watchContract(contractId) {
+  // ── Sell open contract ───────────────────────────────────
+  async sellContract(contractId) {
+    try {
+      const res = await this.conn.send({ sell: contractId, price: 0 });
+      if (res.error) {
+        logger.error(`Sell failed: ${res.error.message}`);
+        return null;
+      }
+      const soldFor = parseFloat(res.sell?.sold_for || 0);
+      const profit  = parseFloat((soldFor - this.stake).toFixed(2));
+      logger.trade(`Sold contract ${contractId} | Received: $${soldFor} | Profit: $${profit}`);
+      return { profit };
+    } catch (err) {
+      logger.error(`Sell error: ${err.message}`);
+      return null;
+    }
+  }
+
+  // ── Watch contract and manage exit ──────────────────────
+  watchAndManage(contractId) {
     return new Promise((resolve) => {
-      // Subscribe to contract-level updates
+      let peakProfit  = 0;
+      let sold        = false;
+
+      // Subscribe to contract updates
       this.conn.send({
         proposal_open_contract: 1,
-        contract_id: contractId,
-        subscribe: 1,
-      });
+        contract_id:            contractId,
+        subscribe:              1,
+      }).catch(() => {});
 
-      // Listen for updates on this contract
-      const handler = (data) => {
+      const handler = async (data) => {
         const poc = data.proposal_open_contract;
         if (!poc || poc.contract_id !== contractId) return;
+        if (sold) return;
 
-        // Contract is still open
-        if (poc.status === 'open') return;
+        const currentProfit = parseFloat(poc.profit || 0);
 
-        // Contract settled
-        const profit = poc.profit || 0;
-        const status = poc.status; // 'won' or 'lost'
+        // Contract ended naturally (barrier hit = loss)
+if (poc.status !== 'open') {
+  sold = true;
+  const finalProfit = parseFloat(poc.profit || 0);
+  const finalStatus = finalProfit > 0 ? 'WON' : 'LOST';
+  logger.trade(`Contract ended | Status: ${finalStatus} | P&L: $${finalProfit.toFixed(2)}`);
+  resolve({ profit: finalProfit, status: finalStatus, contractId });
+  return;
+}
 
-        logger.trade(
-          `Contract ${contractId} settled: ${status.toUpperCase()} | P&L: ${profit >= 0 ? '+' : ''}$${Number(profit).toFixed(2)}`
-        );
+        // Update peak profit
+        if (currentProfit > peakProfit) {
+          peakProfit = currentProfit;
+          logger.info(`Peak profit: $${peakProfit.toFixed(3)} | Current: $${currentProfit.toFixed(3)}`);
+        }
 
-        resolve({ profit: Number(profit), status });
+        // ── Take profit ──────────────────────────────────
+        const takeProfit = this.stake * this.takeProfitPct;
+        if (currentProfit >= takeProfit) {
+          sold = true;
+          logger.success(`🎯 Take profit hit! $${currentProfit.toFixed(2)} — selling now`);
+          const result = await this.sellContract(contractId);
+          resolve({
+            profit:     result?.profit ?? currentProfit,
+            status:     'WON',
+            contractId,
+          });
+          return;
+        }
+
+        // ── Trailing stop ─────────────────────────────────
+        // If we had meaningful profit and it dropped back significantly
+        const minPeakToActivate = this.stake * 0.05; // activate after 10% profit
+        const trailThreshold    = peakProfit * (1 - this.trailingStopPct);
+        if (peakProfit >= minPeakToActivate && currentProfit <= trailThreshold) {
+          sold = true;
+          logger.warn(`📉 Trailing stop hit — peak was $${peakProfit.toFixed(3)}, now $${currentProfit.toFixed(3)}`);
+          const result = await this.sellContract(contractId);
+          resolve({
+            profit:     result?.profit ?? currentProfit,
+            status:     currentProfit > 0 ? 'WON' : 'LOST',
+            contractId,
+          });
+          return;
+        }
       };
 
       this.conn.on('proposal_open_contract', handler);
     });
   }
 
-  /**
-   * Open a trade and await its result (full cycle)
-   */
-  async executeTrade(signal) {
-    const trade = await this.openTrade(signal);
-    if (!trade) return null;
+  // ── Full trade cycle ──────────────────────────────────────
+  async executeTrade() {
+    const contract = await this.openAccumulator();
+    if (!contract) return null;
 
-    const result = await this.watchContract(trade.contractId);
-    return { ...trade, ...result };
+    const result = await this.watchAndManage(contract.contract_id);
+    return result;
   }
 }

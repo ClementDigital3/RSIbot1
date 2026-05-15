@@ -1,44 +1,46 @@
-// index.js — DERIV RSI BOT (New API 2026) + Web Dashboard
+// index.js — DERIV ACCUMULATOR BOT
 
 import dotenv from 'dotenv';
 dotenv.config();
 
 import { DerivConnection } from './src/connection.js';
-import { RSIStrategy } from './src/strategy.js';
-import { RiskManager } from './src/riskManager.js';
-import { Trader } from './src/trader.js';
-import logger from './src/logger.js';
+import { RSIStrategy }     from './src/strategy.js';
+import { RiskManager }     from './src/riskManager.js';
+import { Trader }          from './src/trader.js';
+import logger              from './src/logger.js';
 import { createDashboardServer } from './src/server.js';
 
 const config = {
   DERIV_API_TOKEN:    process.env.DERIV_API_TOKEN,
   DERIV_APP_ID:       process.env.DERIV_APP_ID,
-  DERIV_ACCOUNT_ID:   process.env.DERIV_ACCOUNT_ID || null,
-  SYMBOL:             process.env.SYMBOL             || '1HZ75V',
-  STAKE:              process.env.STAKE              || '1',
-  MAX_ACTIVE_TRADES:  process.env.MAX_ACTIVE_TRADES  || '1',
-  STOP_LOSS_BALANCE:  process.env.STOP_LOSS_BALANCE  || '50',
-  RSI_PERIOD:         process.env.RSI_PERIOD         || '14',
-  RSI_OVERSOLD:       process.env.RSI_OVERSOLD       || '20',
-  RSI_OVERBOUGHT:     process.env.RSI_OVERBOUGHT     || '80',
-  CONTRACT_DURATION:  process.env.CONTRACT_DURATION  || '5',
-  MIN_TICKS_REQUIRED: process.env.MIN_TICKS_REQUIRED || '50',
+  DERIV_ACCOUNT_ID:   process.env.DERIV_ACCOUNT_ID   || null,
+  SYMBOL:             process.env.SYMBOL              || '1HZ75V',
+  STAKE:              process.env.STAKE               || '1',
+  MAX_ACTIVE_TRADES:  process.env.MAX_ACTIVE_TRADES   || '1',
+  STOP_LOSS_BALANCE:  process.env.STOP_LOSS_BALANCE   || '50',
+  GROWTH_RATE:        process.env.GROWTH_RATE         || '0.01',
+  TAKE_PROFIT_PCT:    process.env.TAKE_PROFIT_PCT     || '0.40',
+  TRAILING_STOP_PCT:  process.env.TRAILING_STOP_PCT   || '0.50',
+  MIN_TICKS_REQUIRED: process.env.MIN_TICKS_REQUIRED  || '20',
+  CONTRACT_DURATION:  process.env.CONTRACT_DURATION   || '1',
+  RSI_PERIOD:         '14',
+  RSI_OVERSOLD:       '30',
+  RSI_OVERBOUGHT:     '70',
 };
 
 if (!config.DERIV_API_TOKEN || config.DERIV_API_TOKEN === 'YOUR_PAT_TOKEN_HERE') {
-  console.error('\n❌  Missing DERIV_API_TOKEN in .env file'); process.exit(1);
+  console.error('\n❌  Missing DERIV_API_TOKEN'); process.exit(1);
 }
 if (!config.DERIV_APP_ID || config.DERIV_APP_ID === 'YOUR_APP_ID_HERE') {
-  console.error('\n❌  Missing DERIV_APP_ID in .env file'); process.exit(1);
+  console.error('\n❌  Missing DERIV_APP_ID'); process.exit(1);
 }
 
 async function main() {
-  // Start dashboard server
   const { broadcast } = createDashboardServer(3000);
 
   logger.banner();
-  logger.info(`Symbol: ${config.SYMBOL} | Stake: $${config.STAKE} | Duration: ${config.CONTRACT_DURATION}min`);
-  logger.info(`RSI(${config.RSI_PERIOD}) | Oversold: ${config.RSI_OVERSOLD} | Overbought: ${config.RSI_OVERBOUGHT}`);
+  logger.info(`Mode: ACCUMULATOR | Symbol: ${config.SYMBOL} | Stake: $${config.STAKE}`);
+  logger.info(`Growth: ${parseFloat(config.GROWTH_RATE) * 100}%/tick | Take profit: ${parseFloat(config.TAKE_PROFIT_PCT) * 100}% | Trailing stop: ${parseFloat(config.TRAILING_STOP_PCT) * 100}%`);
   logger.info(`Stop-loss floor: $${config.STOP_LOSS_BALANCE}`);
   logger.divider();
 
@@ -69,17 +71,15 @@ async function main() {
   });
 
   await conn.getBalance();
-
-  logger.info(`Subscribing to ${config.SYMBOL} tick stream...`);
   await conn.subscribeToTicks(config.SYMBOL);
 
   conn.on('reconnected', async () => {
-    logger.info('Reconnected — resubscribing to feeds...');
+    logger.info('Reconnected — resubscribing...');
     try {
       await conn.getBalance();
       await conn.subscribeToTicks(config.SYMBOL);
       strategy.prices = [];
-      logger.info('Resubscribed successfully. Recollecting ticks...');
+      strategy.ready  = false;
       broadcast('reconnected', {});
     } catch (err) {
       logger.error(`Resubscribe failed: ${err.message}`);
@@ -97,8 +97,8 @@ async function main() {
 
     broadcast('tick', {
       price,
-      rsi:            strategy.lastRSI,
-      macd:           strategy.lastMACD?.histogram,
+      rsi:            null,
+      macd:           null,
       signal,
       collecting:     strategy.prices.length < strategy.minTicks,
       ticksCollected: strategy.prices.length,
@@ -109,14 +109,14 @@ async function main() {
 
     const { allowed, reason } = riskMgr.canTrade(account.balance);
     if (!allowed) { logger.warn(`Trade blocked: ${reason}`); return; }
-    if (isTrading) { logger.warn('Trade in progress — skipping signal'); return; }
+    if (isTrading) return;
 
     isTrading = true;
     riskMgr.onTradeOpened();
-    broadcast('trade_opened', { signal, stake: config.STAKE, symbol: config.SYMBOL });
+    broadcast('trade_opened', { signal: 'BUY', stake: config.STAKE, symbol: config.SYMBOL });
 
     try {
-      const result = await trader.executeTrade(signal);
+      const result = await trader.executeTrade();
       if (result) {
         riskMgr.onTradeClosed(result.profit);
         broadcast('trade_closed', {
@@ -128,13 +128,16 @@ async function main() {
           netPnL:     riskMgr.totalPnL,
           contractId: result.contractId,
         });
+        // Reset strategy so next trade opens immediately
+        strategy.reset();
       } else {
         riskMgr.activeTrades = Math.max(0, riskMgr.activeTrades - 1);
-        logger.warn('Trade failed — counter reset');
+        strategy.reset();
       }
     } catch (err) {
       logger.error(`Trade error: ${err.message}`);
       riskMgr.activeTrades = Math.max(0, riskMgr.activeTrades - 1);
+      strategy.reset();
     } finally {
       isTrading = false;
     }
@@ -147,7 +150,6 @@ async function main() {
     logger.warn('Shutting down...');
     const s = riskMgr.getSummary();
     logger.info(`Wins: ${s.wins} | Losses: ${s.losses} | Win Rate: ${s.winRate} | Net P&L: ${s.netPnL}`);
-    logger.divider();
     broadcast('shutdown', s);
     conn.close();
     process.exit(0);
